@@ -2,7 +2,6 @@ package org.ekstep.analytics.job.report
 
 import java.io.File
 
-import org.apache.avro.generic.GenericData.StringType
 import org.apache.spark.SparkContext
 import org.apache.spark.sql.{DataFrame, _}
 import org.apache.spark.sql.expressions.Window
@@ -10,7 +9,6 @@ import org.apache.spark.sql.functions.{col, lit, _}
 import org.ekstep.analytics.framework.Level.INFO
 import org.ekstep.analytics.framework.{FrameworkContext, _}
 import org.ekstep.analytics.framework.util.{JSONUtils, JobLogger}
-import org.ekstep.analytics.job.report.StateAdminGeoReportJob.{generateBlockLevelData, generateSubOrgData}
 import org.ekstep.analytics.util.HDFSFileUtils
 import org.sunbird.cloud.storage.conf.AppConf
 
@@ -64,7 +62,7 @@ object StateAdminReportJob extends optional.Application with IJob with StateAdmi
 
   def generateStateRootSubOrgDF(subOrgDF: DataFrame, claimedShadowDataSummaryDF: DataFrame, claimedShadowUserDF: DataFrame) = {
     val rootSubOrg = subOrgDF.where(col("isrootorg") && col("status").equalTo(1))
-    val stateUsersDf = rootSubOrg.join(claimedShadowUserDF, rootSubOrg.col("externalid") === (claimedShadowUserDF.col("orgextid")),"left_outer")
+    val stateUsersDf = rootSubOrg.join(claimedShadowUserDF, rootSubOrg.col("externalid") === (claimedShadowUserDF.col("orgextid")),"inner")
       .withColumnRenamed("orgname","School name")
       .withColumn("District id", lit("")).withColumn("District name", lit( "")).withColumn("Block id", lit("")).withColumn("Block name", lit(""))
       .select(col("School name"), col("District id"), col("District name"), col("Block id"), col("Block name"), col("slug"),
@@ -76,7 +74,6 @@ object StateAdminReportJob extends optional.Application with IJob with StateAdmi
 
         import sparkSession.implicits._
 
-        var districtUserResult: DataFrame = SparkSession.builder().getOrCreate().emptyDataFrame
         val shadowDataEncoder = Encoders.product[ShadowUserData].schema
         val shadowUserDF = loadData(sparkSession, Map("table" -> "shadow_user", "keyspace" -> sunbirdKeyspace), Some(shadowDataEncoder)).as[ShadowUserData]
         val claimedShadowUserDF = shadowUserDF.where(col("claimstatus")=== ClaimedStatus.id)
@@ -103,9 +100,8 @@ object StateAdminReportJob extends optional.Application with IJob with StateAdmi
         // We can directly write to the slug folder
         val subOrgDF: DataFrame = generateSubOrgData(organisationDF)
         val blockDataWithSlug:DataFrame = generateBlockLevelData(subOrgDF)
-        val userDistrictSummaryDF = blockDataWithSlug.where(col("Block id").isNotNull).join(claimedShadowUserDF, blockDataWithSlug.col("externalid") === (claimedShadowUserDF.col("orgextid")),"left_outer")
+        val userDistrictSummaryDF = claimedShadowUserDF.join(blockDataWithSlug, blockDataWithSlug.col("externalid") === (claimedShadowUserDF.col("orgextid")),"inner")
         val validatedUsersWithDst = userDistrictSummaryDF.groupBy(col("slug"), col("Channels")).agg(countDistinct("District name").as("districts"),countDistinct("Block id").as("blocks"),countDistinct(claimedShadowUserDF.col("orgextid")).as("schools"))
-
         val validatedShadowDataSummaryDF = claimedShadowDataSummaryDF.join(validatedUsersWithDst, claimedShadowDataSummaryDF.col("channel") === validatedUsersWithDst.col("Channels"))
         val validatedGeoSummaryDF = validatedShadowDataSummaryDF.withColumn("registered",
           when(col("1").isNull, 0).otherwise(col("1"))).drop("1", "channel", "Channels")
@@ -122,14 +118,14 @@ object StateAdminReportJob extends optional.Application with IJob with StateAdmi
         fSFileUtils.purgeDirectory(detailDir)
         renameChannelDirsToSlug(renamedDir, channelSlugMap)
 
-        districtUserResult = userDistrictSummaryDF.groupBy(col("slug"), col("District name").as("districtName")).
-          agg(countDistinct("Block id").as("blocks"),countDistinct(claimedShadowUserDF.col("orgextid")).as("schools"), count("userextid").as("registered"))
+        val districtUserResult = userDistrictSummaryDF.groupBy(col("slug"), col("District name").as("districtName")).
+            agg(countDistinct("Block id").as("blocks"),countDistinct(claimedShadowUserDF.col("orgextid")).as("schools"), count("userextid").as("registered"))
         saveUserDistrictSummary(districtUserResult)
+
 
         val stateUserResult = stateOrgDf.groupBy(col("slug"), col("District name").as("districtName")).
           agg(when(col("District name").isin(""), 0).otherwise(countDistinct("Block id")).as("blocks"), countDistinct(col("externalid")).as("schools"), count("userextid").as("registered"))
         saveUserStateSummary(stateUserResult)
-
         districtUserResult
     }
 

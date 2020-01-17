@@ -39,8 +39,8 @@ trait StateAdminReportHelper extends  BaseReportsJob {
 
   def generateBlockLevelData(subOrgJoinedDF: DataFrame)(implicit sparkSession: SparkSession) = {
 
-    val districtDF = subOrgJoinedDF.where(col("loctype").equalTo("district")).select(col("channel"), col("slug"), col("id").as("schoolid"), col("orgname").as("schoolname"), col("locid").as("districtid"), col("locname").as("districtname"));
-    val blockDF = subOrgJoinedDF.where(col("loctype").equalTo("block")).select(col("id").as("schooljoinid"), col("locid").as("blockid"), col("locname").as("blockname"), col("externalid"));
+    val districtDF = subOrgJoinedDF.where(col("loctype").equalTo("district")).select(col("channel"), col("slug"), col("id").as("schoolid"), col("orgname").as("schoolname"), col("locid").as("districtid"), col("locname").as("districtname"), col("externalid"));
+    val blockDF = subOrgJoinedDF.where(col("loctype").equalTo("block")).select(col("id").as("schooljoinid"), col("locid").as("blockid"), col("locname").as("blockname"));
     val window = Window.partitionBy("slug").orderBy(asc("districtName"))
     val blockData = blockDF.join(districtDF, blockDF.col("schooljoinid").equalTo(districtDF.col("schoolid")), "right_outer").drop(col("schooljoinid")).coalesce(1)
       .withColumn("index",row_number().over(window)).select(
